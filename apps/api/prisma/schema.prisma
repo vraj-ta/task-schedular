@@ -1,0 +1,11 @@
+// Task scheduler control-plane database.
+// Models will be added in the Phase 1 implementation pass — see ../../docs/architecture.md.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
