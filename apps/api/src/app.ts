@@ -3,8 +3,10 @@ import cors from 'cors';
 import express, { type Express } from 'express';
 import helmet from 'helmet';
 
+import { verifyAdminKey } from './middleware/admin-auth.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { healthRouter } from './routes/health.js';
+import { platformsRouter } from './routes/platforms.js';
 
 /**
  * Build the control-plane Express app.
@@ -29,6 +31,9 @@ export const createApp = (): Express => {
 
   // Liveness/readiness — outside any /api prefix and unauthenticated by design.
   app.use('/', healthRouter);
+
+  // Admin surface: PlatformConnection CRUD. Behind SCHEDULER_ADMIN_API_KEY.
+  app.use('/api/platforms', verifyAdminKey, platformsRouter);
 
   // 404 + final error handler must remain last.
   app.use(notFoundHandler);

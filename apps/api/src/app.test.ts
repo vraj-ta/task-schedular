@@ -1,7 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import request from 'supertest';
 
 import { createApp } from './app.js';
+import { resetEnvCache } from './config/env.js';
+
+const VALID_ENV = {
+  SCHEDULER_DATABASE_URL: 'postgresql://x:x@localhost:5432/x',
+  SCHEDULER_SECRET_KEY: '0'.repeat(64),
+  SCHEDULER_ADMIN_API_KEY: 'a'.repeat(64),
+};
+
+beforeEach(() => {
+  Object.assign(process.env, VALID_ENV);
+  resetEnvCache();
+});
 
 describe('createApp', () => {
   it('serves /healthz', async () => {
@@ -28,5 +40,20 @@ describe('createApp', () => {
     const res = await request(createApp()).get('/healthz');
     // Just probe one well-known helmet default; full coverage is helmet's tests.
     expect(res.headers['x-content-type-options']).toBe('nosniff');
+  });
+
+  it('/api/platforms is gated by SCHEDULER_ADMIN_API_KEY', async () => {
+    // No Authorization header → 401 MISSING_BEARER_TOKEN
+    const res = await request(createApp()).get('/api/platforms');
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('MISSING_BEARER_TOKEN');
+  });
+
+  it('/api/platforms rejects a wrong admin key', async () => {
+    const res = await request(createApp())
+      .get('/api/platforms')
+      .set('Authorization', `Bearer ${'b'.repeat(64)}`);
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('INVALID_ADMIN_KEY');
   });
 });
