@@ -23,6 +23,7 @@ const makeRes = () => {
 const validEnv = {
   SCHEDULER_DATABASE_URL: 'postgresql://x:x@localhost:5432/x',
   SCHEDULER_SECRET_KEY: '0'.repeat(64),
+  SCHEDULER_ADMIN_API_KEY: 'a'.repeat(64),
 };
 
 const previousEnv = { ...process.env };

@@ -21,6 +21,13 @@ const envSchema = z.object({
   SCHEDULER_SECRET_KEY: z
     .string()
     .regex(/^[0-9a-fA-F]{64}$/, 'must be a 32-byte hex string (64 hex chars)'),
+  /**
+   * Bearer secret for `/api/platforms` admin routes. Operators present it as
+   * `Authorization: Bearer <key>`. Generate via `openssl rand -hex 32`.
+   * Minimum 32 chars enforces enough entropy that constant-time compare is
+   * meaningful even if an attacker can probe.
+   */
+  SCHEDULER_ADMIN_API_KEY: z.string().min(32),
   ARTIFACT_STORAGE: z.enum(['local', 's3']).default('local'),
   ARTIFACT_LOCAL_PATH: z.string().default('/var/scheduler/artifacts'),
   /** Time SIGTERM gives in-flight jobs to finish before forced shutdown. */

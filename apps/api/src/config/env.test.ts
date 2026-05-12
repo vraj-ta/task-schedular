@@ -4,6 +4,7 @@ import { loadEnv, resetEnvCache } from './env.js';
 const validRaw: NodeJS.ProcessEnv = {
   SCHEDULER_DATABASE_URL: 'postgresql://scheduler:scheduler@localhost:5432/task_scheduler',
   SCHEDULER_SECRET_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  SCHEDULER_ADMIN_API_KEY: 'a'.repeat(64),
 };
 
 describe('loadEnv', () => {
@@ -27,15 +28,36 @@ describe('loadEnv', () => {
   });
 
   it('throws on missing SCHEDULER_DATABASE_URL with a readable message', () => {
-    expect(() => loadEnv({ SCHEDULER_SECRET_KEY: validRaw.SCHEDULER_SECRET_KEY })).toThrow(
-      /SCHEDULER_DATABASE_URL/,
-    );
+    expect(() =>
+      loadEnv({
+        SCHEDULER_SECRET_KEY: validRaw.SCHEDULER_SECRET_KEY,
+        SCHEDULER_ADMIN_API_KEY: validRaw.SCHEDULER_ADMIN_API_KEY,
+      }),
+    ).toThrow(/SCHEDULER_DATABASE_URL/);
   });
 
   it('throws on missing SCHEDULER_SECRET_KEY', () => {
-    expect(() => loadEnv({ SCHEDULER_DATABASE_URL: validRaw.SCHEDULER_DATABASE_URL })).toThrow(
-      /SCHEDULER_SECRET_KEY/,
-    );
+    expect(() =>
+      loadEnv({
+        SCHEDULER_DATABASE_URL: validRaw.SCHEDULER_DATABASE_URL,
+        SCHEDULER_ADMIN_API_KEY: validRaw.SCHEDULER_ADMIN_API_KEY,
+      }),
+    ).toThrow(/SCHEDULER_SECRET_KEY/);
+  });
+
+  it('throws on missing SCHEDULER_ADMIN_API_KEY', () => {
+    expect(() =>
+      loadEnv({
+        SCHEDULER_DATABASE_URL: validRaw.SCHEDULER_DATABASE_URL,
+        SCHEDULER_SECRET_KEY: validRaw.SCHEDULER_SECRET_KEY,
+      }),
+    ).toThrow(/SCHEDULER_ADMIN_API_KEY/);
+  });
+
+  it('rejects an admin key shorter than 32 chars', () => {
+    expect(() =>
+      loadEnv({ ...validRaw, SCHEDULER_ADMIN_API_KEY: 'too-short' }),
+    ).toThrow(/SCHEDULER_ADMIN_API_KEY/);
   });
 
   it('rejects a non-hex SCHEDULER_SECRET_KEY', () => {
