@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+.pnp.*
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Prisma generated client
+apps/*/src/generated/
+apps/*/prisma/generated/
+
+# Test output
+coverage/
+.nyc_output/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local artifact storage (control-plane)
+var/scheduler/artifacts/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
