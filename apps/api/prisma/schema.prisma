@@ -1,5 +1,9 @@
 // Task scheduler control-plane database.
-// Models will be added in the Phase 1 implementation pass — see ../../docs/architecture.md.
+// See c:\dev\task-schedular\docs\architecture.md for the design behind these models.
+//
+// Multi-tenancy is enforced by query predicate: every queue/runtime model carries
+// a `projectConnectionId` FK to PlatformConnection. Workers can only claim jobs
+// whose `projectConnectionId` matches their registration.
 
 generator client {
   provider = "prisma-client"
@@ -8,4 +12,244 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================================
+// Tenant / connection
+// ============================================================
+
+/// One registered project. Holds the per-project JWT signing secret used to
+/// verify forwarded user JWTs from that project's admin/user backend, and
+/// optional platform-side service credentials used by the PlatformDriver.
+model PlatformConnection {
+  id                    String             @id @default(uuid())
+  /// Stable identifier the generated backends send in `X-Project-Id`.
+  projectSlug           String             @unique
+  name                  String
+  /// Base URL the control-plane can reach the project's backend at (driver use).
+  baseUrl               String
+  targetType            PlatformTargetType @default(NODE)
+  /// AES-256-GCM ciphertext of the project's JWT signing secret.
+  jwtSecretCiphertext   Bytes
+  /// AES-256-GCM ciphertext of platform-side service credentials.
+  credentialsCiphertext Bytes?
+  /// Configuration mirror of the `taskScheduler` block on the project's
+  /// extendedAppConfigurationSchema (poll cadence, retry policy, system-jobs cron, etc.).
+  config                Json
+  enabled               Boolean            @default(true)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+
+  scheduledJobs      ScheduledJob[]
+  recurringSchedules RecurringSchedule[]
+  jobArtifacts       JobArtifact[]
+  workers            Worker[]
+
+  @@index([enabled])
+}
+
+// ============================================================
+// Workers
+// ============================================================
+
+/// A per-project worker process registered with the control-plane.
+/// Workers authenticate to dispatch endpoints using an HMAC bearer token
+/// issued at registration; only its sha256 hash is stored here.
+model Worker {
+  id                  String             @id @default(uuid())
+  projectConnectionId String
+  projectConnection   PlatformConnection @relation(fields: [projectConnectionId], references: [id], onDelete: Cascade)
+  /// Caller-chosen, stable across restarts of the same worker process.
+  workerId            String
+  bearerTokenHash     String
+  capabilities        String[]           @default([])
+  lastSeenAt          DateTime           @default(now())
+  enabled             Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  claimedJobs ScheduledJob[] @relation("WorkerClaimedJobs")
+
+  @@unique([projectConnectionId, workerId])
+  @@index([projectConnectionId, lastSeenAt])
+}
+
+// ============================================================
+// Queue
+// ============================================================
+
+/// A single unit of work. State transitions:
+///   PENDING -> SCHEDULED? -> CLAIMED -> RUNNING -> SUCCEEDED | FAILED | CANCELLED | RETRYING | DEAD_LETTER
+/// Claim is `SELECT … FOR UPDATE SKIP LOCKED LIMIT 1` via prisma.$queryRaw.
+model ScheduledJob {
+  id                  String             @id @default(uuid())
+  projectConnectionId String
+  projectConnection   PlatformConnection @relation(fields: [projectConnectionId], references: [id], onDelete: Cascade)
+  type                ScheduledJobType
+  /// Slug of the target entity (e.g. "customer") when applicable.
+  entitySlug          String?
+  payload             Json
+  status              ScheduledJobStatus @default(PENDING)
+  priority            Int                @default(0)
+  attempts            Int                @default(0)
+  maxAttempts         Int                @default(3)
+  /// Not-before timestamp; ignored for cron-fired jobs that pass now().
+  scheduledFor        DateTime           @default(now())
+  startedAt           DateTime?
+  completedAt         DateTime?
+  failedAt            DateTime?
+  cancelledAt         DateTime?
+  /// Worker currently holding the claim, if any.
+  lockedById          String?
+  lockedBy            Worker?            @relation("WorkerClaimedJobs", fields: [lockedById], references: [id], onDelete: SetNull)
+  /// Reaper sweeps jobs whose lockedUntil < now() and flips them to RETRYING.
+  lockedUntil         DateTime?
+  progress            Int                @default(0)
+  totalUnits          Int?
+  processedUnits      Int                @default(0)
+  successCount        Int                @default(0)
+  errorCount          Int                @default(0)
+  result              Json?
+  error               String?
+  /// userId, 'cron', or 'system'.
+  triggeredBy         String
+  triggerSource       TriggerSource
+  /// For fan-out / chained jobs.
+  parentJobId         String?
+  parent              ScheduledJob?      @relation("JobChain", fields: [parentJobId], references: [id], onDelete: SetNull)
+  children            ScheduledJob[]     @relation("JobChain")
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  artifacts JobArtifact[]
+
+  /// Claim hot path — priority desc, scheduledFor asc, createdAt asc, scoped to project + status.
+  @@index([projectConnectionId, status, priority, scheduledFor, createdAt])
+  /// Operator queries: list jobs by status.
+  @@index([projectConnectionId, status, scheduledFor])
+  /// Cross-project diagnostics.
+  @@index([type, status])
+  @@index([entitySlug])
+  @@index([triggeredBy])
+  @@index([parentJobId])
+}
+
+// ============================================================
+// Recurring schedules
+// ============================================================
+
+/// Cron-driven schedule. The control-plane's tick loop enqueues a fresh
+/// ScheduledJob each time the cron expression fires, then recomputes nextRunAt.
+model RecurringSchedule {
+  id                  String             @id @default(uuid())
+  projectConnectionId String
+  projectConnection   PlatformConnection @relation(fields: [projectConnectionId], references: [id], onDelete: Cascade)
+  /// Project-scoped name, e.g. "system:cleanupExpiredTokens" or "action:<slug>".
+  name                String
+  type                ScheduledJobType
+  payload             Json
+  cronExpression      String
+  timezone            String             @default("UTC")
+  enabled             Boolean            @default(true)
+  overlapPolicy       OverlapPolicy      @default(SKIP)
+  lastRunAt           DateTime?
+  lastJobId           String?
+  nextRunAt           DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  @@unique([projectConnectionId, name])
+  @@index([enabled, nextRunAt])
+}
+
+// ============================================================
+// Artifacts
+// ============================================================
+
+/// Input (uploaded file), output (export, summary), or error report tied to a job.
+/// projectConnectionId is duplicated for direct project-scoped queries without a join.
+model JobArtifact {
+  id                  String             @id @default(uuid())
+  projectConnectionId String
+  projectConnection   PlatformConnection @relation(fields: [projectConnectionId], references: [id], onDelete: Cascade)
+  jobId               String
+  job                 ScheduledJob       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  kind                ArtifactKind
+  filename            String
+  storage             ArtifactStorage    @default(LOCAL)
+  /// Local FS path or S3 key.
+  path                String
+  sizeBytes           BigInt
+  mimeType            String
+  checksumSha256      String?
+  expiresAt           DateTime?
+  createdAt           DateTime           @default(now())
+
+  @@index([projectConnectionId, jobId])
+  @@index([expiresAt])
+}
+
+// ============================================================
+// Enums
+// ============================================================
+
+enum PlatformTargetType {
+  NODE
+  DOTNET
+}
+
+enum ScheduledJobType {
+  BULK_IMPORT
+  BULK_UPDATE
+  BULK_DELETE
+  BULK_EXPORT
+  SCHEDULED_ACTION
+  SYSTEM_CLEANUP_TOKENS
+  SYSTEM_CLEANUP_AUDIT
+  SYSTEM_CLEANUP_UPLOADS
+  SYSTEM_CLEANUP_JOBS
+  WEBHOOK_DELIVERY
+  EMAIL_BLAST
+  REPORT_GENERATION
+  EXTERNAL_SYNC
+}
+
+enum ScheduledJobStatus {
+  PENDING
+  SCHEDULED
+  CLAIMED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  RETRYING
+  DEAD_LETTER
+}
+
+enum TriggerSource {
+  MANUAL
+  SCHEDULED
+  RECURRING
+  WEBHOOK
+  SYSTEM
+}
+
+enum ArtifactKind {
+  INPUT
+  OUTPUT
+  ERROR_REPORT
+}
+
+enum ArtifactStorage {
+  LOCAL
+  S3
+}
+
+enum OverlapPolicy {
+  /// If a previous run is still active, skip this firing.
+  SKIP
+  /// Queue this firing as a new job; multiple may run in parallel.
+  QUEUE
+  /// Cancel the previous run and enqueue this firing.
+  CANCEL_PREV
 }
