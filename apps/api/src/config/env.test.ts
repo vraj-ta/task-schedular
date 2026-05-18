@@ -5,6 +5,8 @@ const validRaw: NodeJS.ProcessEnv = {
   SCHEDULER_DATABASE_URL: 'postgresql://scheduler:scheduler@localhost:5432/task_scheduler',
   SCHEDULER_SECRET_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
   SCHEDULER_ADMIN_API_KEY: 'a'.repeat(64),
+  ADMIN_JWT_SECRET: 'b'.repeat(64),
+  ARTIFACT_SIGNING_KEY: 'c'.repeat(64),
 };
 
 describe('loadEnv', () => {

@@ -190,8 +190,58 @@ model JobArtifact {
 }
 
 // ============================================================
+// Admin users (operator console login)
+// ============================================================
+
+/// Operator account authorized to use the control-plane UI / admin API.
+/// Authentication: email + bcrypt(passwordHash). Sessions are stored in
+/// AdminSession; the access token is a short-lived JWT, the refresh token
+/// is a sha256-hashed opaque token persisted in AdminSession.
+model AdminUser {
+  id           String        @id @default(uuid())
+  email        String        @unique
+  passwordHash String
+  displayName  String
+  role         AdminRole     @default(ADMIN)
+  enabled      Boolean       @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  sessions AdminSession[]
+
+  @@index([enabled])
+}
+
+/// Refresh-token bound session. The opaque refresh token's sha256 hash is
+/// stored here; rotation issues a new row + token and revokes the previous.
+model AdminSession {
+  id                  String    @id @default(uuid())
+  adminUserId         String
+  adminUser           AdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  refreshTokenHash    String    @unique
+  /// Absolute expiry of the refresh token. After this, the session cannot be refreshed.
+  expiresAt           DateTime
+  /// Set when the session is logged out or rotated; subsequent refreshes are rejected.
+  revokedAt           DateTime?
+  /// Best-effort client metadata for the session list UI.
+  userAgent           String?
+  ipAddress           String?
+  createdAt           DateTime  @default(now())
+  lastUsedAt          DateTime  @default(now())
+
+  @@index([adminUserId, revokedAt])
+  @@index([expiresAt])
+}
+
+// ============================================================
 // Enums
 // ============================================================
+
+enum AdminRole {
+  ADMIN
+  VIEWER
+}
 
 enum PlatformTargetType {
   NODE

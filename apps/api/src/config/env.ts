@@ -28,14 +28,46 @@ const envSchema = z.object({
    * meaningful even if an attacker can probe.
    */
   SCHEDULER_ADMIN_API_KEY: z.string().min(32),
+  /**
+   * HMAC signing key for the operator-UI access-token JWT. Required for the
+   * `apps/web` login flow. Generate via `openssl rand -hex 32`.
+   */
+  ADMIN_JWT_SECRET: z.string().min(32),
+  /** Lifetime of issued operator access tokens (JWT). */
+  ADMIN_ACCESS_TOKEN_TTL_MIN: z.coerce.number().int().min(1).max(1440).default(15),
+  /** Lifetime of issued operator refresh tokens (DB-backed `AdminSession`). */
+  ADMIN_REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  /** bcrypt cost factor. 10 is a good default for interactive logins. */
+  BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
+  /**
+   * HMAC key for signed artifact-download URLs. Separate from `SCHEDULER_SECRET_KEY`
+   * so a leaked download link can't compromise PlatformConnection secrets.
+   * Generate via `openssl rand -hex 32`.
+   */
+  ARTIFACT_SIGNING_KEY: z.string().min(32),
   ARTIFACT_STORAGE: z.enum(['local', 's3']).default('local'),
   ARTIFACT_LOCAL_PATH: z.string().default('/var/scheduler/artifacts'),
+  /** Max artifact-download signed-URL TTL (seconds). */
+  ARTIFACT_URL_TTL_SECONDS: z.coerce.number().int().min(30).max(86_400).default(600),
   /** Time SIGTERM gives in-flight jobs to finish before forced shutdown. */
   SHUTDOWN_GRACE_MS: z.coerce.number().int().min(0).default(30_000),
   /** Reaper considers a CLAIMED/RUNNING job stale once this expires. */
   WORKER_LOCK_TTL_MS: z.coerce.number().int().min(60_000).default(5 * 60_000),
+  /** Reaper sweep cadence (ms). */
+  REAPER_INTERVAL_MS: z.coerce.number().int().min(5_000).default(30_000),
+  /** Scheduler tick cadence (ms) — how often we look for due RecurringSchedules. */
+  SCHEDULER_TICK_INTERVAL_MS: z.coerce.number().int().min(1_000).default(15_000),
   /** Max time a worker long-poll blocks before getting a 204. */
   LONG_POLL_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(60_000).default(30_000),
+  /** Whether the in-process worker is enabled. Disable in tests. */
+  IN_PROCESS_WORKER_ENABLED: z
+    .union([z.boolean(), z.enum(['true', 'false', '0', '1'])])
+    .transform((v) => v === true || v === 'true' || v === '1')
+    .default(true),
+  /** Concurrency for the in-process worker. */
+  IN_PROCESS_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(64).default(2),
+  /** Poll cadence when the in-process worker finds no claimable work. */
+  IN_PROCESS_WORKER_IDLE_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
 });
 
 export type Env = z.infer<typeof envSchema>;
