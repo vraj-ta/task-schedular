@@ -22,7 +22,7 @@ docker compose exec api node dist/scripts/bootstrap-admin.js \
   --email you@example.com --password yourpass --name "Your Name"
 
 # 4. Open the operator console
-#    http://localhost:5173
+#    http://localhost:1107
 ```
 
 Stack components:
@@ -32,7 +32,7 @@ Stack components:
 | `postgres` | `postgres:17-alpine` | `5434` (configurable via `POSTGRES_PORT`) | Isolated to this stack via a named volume. |
 | `migrate` | `task-scheduler-api` | — | One-shot. Runs `prisma migrate deploy` then exits 0. |
 | `api` | `task-scheduler-api` | `4100` | HTTP API + scheduler tick + reaper + in-process worker. |
-| `web` | `task-scheduler-web` | `5173` | Nginx serving the SPA, proxies `/api` to `api:4100`. |
+| `web` | `task-scheduler-web` | `1107` | Nginx serving the SPA, proxies `/api` to `api:4100`. |
 
 Tear down + wipe DB and artifacts:
 
@@ -60,7 +60,7 @@ npm run bootstrap-admin --workspace=@task-scheduler/api -- \
 # Terminal A: API (http://localhost:4100)
 npm run dev --workspace=@task-scheduler/api
 
-# Terminal B: SPA (http://localhost:5173, proxies /api to 4100)
+# Terminal B: SPA (http://localhost:1107, proxies /api to 4100)
 npm run dev --workspace=@task-scheduler/web
 ```
 
