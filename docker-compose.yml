@@ -1,0 +1,90 @@
+# Task Scheduler — full local stack.
+#
+#   docker compose --env-file .env up --build
+#
+# Services:
+#   - postgres   isolated Postgres 17 for the control-plane DB
+#   - api        control-plane HTTP + scheduler tick + reaper + in-process worker
+#                (entrypoint applies any pending Prisma migrations on boot)
+#   - web        nginx serving the SPA bundle, proxies /api to api
+#
+# After the first `up`, bootstrap the first admin user:
+#   docker compose exec api node dist/scripts/bootstrap-admin.js \
+#     --email you@example.com --password yourpass --name "You"
+#
+# Postgres is exposed on host port ${POSTGRES_PORT:-5433} so you can connect with
+# psql / Prisma Studio from the host without colliding with a local Postgres.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: scheduler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-scheduler}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-scheduler}
+      POSTGRES_DB: ${POSTGRES_DB:-task_scheduler}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - scheduler-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER:-scheduler} -d $${POSTGRES_DB:-task_scheduler}
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: task-scheduler-api:latest
+    container_name: scheduler-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      SCHEDULER_PORT: 4100
+      SCHEDULER_DATABASE_URL: postgresql://${POSTGRES_USER:-scheduler}:${POSTGRES_PASSWORD:-scheduler}@postgres:5432/${POSTGRES_DB:-task_scheduler}
+      SCHEDULER_SECRET_KEY: ${SCHEDULER_SECRET_KEY}
+      SCHEDULER_ADMIN_API_KEY: ${SCHEDULER_ADMIN_API_KEY}
+      ADMIN_JWT_SECRET: ${ADMIN_JWT_SECRET}
+      ADMIN_ACCESS_TOKEN_TTL_MIN: ${ADMIN_ACCESS_TOKEN_TTL_MIN:-15}
+      ADMIN_REFRESH_TOKEN_TTL_DAYS: ${ADMIN_REFRESH_TOKEN_TTL_DAYS:-30}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-10}
+      ARTIFACT_SIGNING_KEY: ${ARTIFACT_SIGNING_KEY}
+      ARTIFACT_STORAGE: local
+      ARTIFACT_LOCAL_PATH: /var/scheduler/artifacts
+      ARTIFACT_URL_TTL_SECONDS: ${ARTIFACT_URL_TTL_SECONDS:-600}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      WORKER_LOCK_TTL_MS: ${WORKER_LOCK_TTL_MS:-300000}
+      REAPER_INTERVAL_MS: ${REAPER_INTERVAL_MS:-30000}
+      SCHEDULER_TICK_INTERVAL_MS: ${SCHEDULER_TICK_INTERVAL_MS:-15000}
+      LONG_POLL_TIMEOUT_MS: ${LONG_POLL_TIMEOUT_MS:-30000}
+      IN_PROCESS_WORKER_ENABLED: ${IN_PROCESS_WORKER_ENABLED:-true}
+      IN_PROCESS_WORKER_CONCURRENCY: ${IN_PROCESS_WORKER_CONCURRENCY:-2}
+      IN_PROCESS_WORKER_IDLE_MS: ${IN_PROCESS_WORKER_IDLE_MS:-1000}
+    ports:
+      - "${SCHEDULER_PORT:-4100}:4100"
+    volumes:
+      - scheduler-artifacts:/var/scheduler/artifacts
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: task-scheduler-web:latest
+    container_name: scheduler-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-5173}:80"
+
+volumes:
+  scheduler-postgres-data:
+  scheduler-artifacts:

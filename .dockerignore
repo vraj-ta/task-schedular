@@ -1,0 +1,41 @@
+# Keep the Docker build context small.
+# Anything matched here is invisible to `docker build` / `docker compose build`.
+
+# Dependencies & local node binaries — re-installed inside the build stage.
+node_modules
+**/node_modules
+.npm
+
+# Local build outputs (the Dockerfile recompiles fresh).
+**/dist
+apps/api/src/generated
+
+# Test / dev caches
+.vitest
+.cache
+coverage
+
+# IDE / OS
+.vscode
+.idea
+.DS_Store
+*.log
+*.tsbuildinfo
+
+# Git / docs that don't belong in the image
+.git
+.gitignore
+.github
+.claude
+
+# Secrets — never copy into images.
+.env
+.env.*
+!.env.example
+**/*.env
+!**/.env.example
+
+# Docker artifacts themselves
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile.*
