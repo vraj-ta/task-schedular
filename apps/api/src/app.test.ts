@@ -8,6 +8,8 @@ const VALID_ENV = {
   SCHEDULER_DATABASE_URL: 'postgresql://x:x@localhost:5432/x',
   SCHEDULER_SECRET_KEY: '0'.repeat(64),
   SCHEDULER_ADMIN_API_KEY: 'a'.repeat(64),
+  ADMIN_JWT_SECRET: 'b'.repeat(64),
+  ARTIFACT_SIGNING_KEY: 'c'.repeat(64),
 };
 
 beforeEach(() => {
@@ -49,11 +51,12 @@ describe('createApp', () => {
     expect(res.body.error.code).toBe('MISSING_BEARER_TOKEN');
   });
 
-  it('/api/platforms rejects a wrong admin key', async () => {
+  it('/api/platforms rejects a wrong bearer (falls through to JWT verification)', async () => {
+    // Wrong static key + invalid JWT shape → INVALID_TOKEN
     const res = await request(createApp())
       .get('/api/platforms')
       .set('Authorization', `Bearer ${'b'.repeat(64)}`);
     expect(res.status).toBe(401);
-    expect(res.body.error.code).toBe('INVALID_ADMIN_KEY');
+    expect(['INVALID_TOKEN', 'MALFORMED_TOKEN']).toContain(res.body.error.code);
   });
 });
