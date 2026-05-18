@@ -1,6 +1,12 @@
 # Task Scheduler — Architecture
 
-**Status:** Locked 2026-05-12. Supersedes the 2026-05-04 standalone-only design.
+**Status:** Locked 2026-05-18. Supersedes the 2026-05-12 lock.
+
+Phase-1 deltas from the 2026-05-12 lock:
+- **Control-plane UI is back in scope** (`apps/web`) — operator-facing console for jobs, schedules, artifacts, workers, platforms, admins. Decision #7 (no UI) is dropped.
+- **Own admin login is back in scope** — `AdminUser` + bcrypt + access-token JWT + refresh-token DB session. The `SCHEDULER_ADMIN_API_KEY` bearer remains for service-level scripting; UI users use email/password.
+- **Phase-1 runners execute in-process** in the control-plane container. The per-project worker design (long-poll dispatch, HMAC bearer, `PlatformDriver`) is preserved on paper for Phase 2; dispatch endpoints exist and are tested, but the in-process worker is what actually runs the runners for now.
+- **Platform-repo additions are deferred** to a follow-up. No writes to `c:\dev\ReactAIClientConfiguration` in this phase.
 
 ## Mission
 
@@ -66,7 +72,7 @@ admin-frontend(X)
 
 6. **`PlatformDriver` abstraction in both components.** Each `PlatformConnection` row carries `targetType: 'NODE' | 'DOTNET'`; a factory selects the implementation at runtime. `NodePlatformDriver` is fully implemented; `DotNetPlatformDriver` throws until requirements arrive.
 
-7. **No control-plane UI in Phase 1.** Operator interactions happen via REST, CLI, and Prometheus. Optional UI lives in a separate phase and a separate repo.
+7. **Control-plane UI lives at `apps/web`.** Vite + React + TypeScript. Authenticates operators with email/password against `AdminUser`; access token (15 min JWT) + refresh token (30 d, DB-backed `AdminSession` for revocation). The `SCHEDULER_ADMIN_API_KEY` bearer remains as a service/scripting credential and continues to gate the same admin surface.
 
 8. **Prisma versions are deliberately split.** Control-plane: 7.x — aligns with the platform's pin in `c:\dev\ReactAIClientConfiguration\app\backend\package.json` (currently `^7.3.0`). Per-project worker: 6.16 — aligns with the generated-app pin emitted by `app/backend/src/generators/backend/project-scaffold.ts:94` (`^6.16.3`). Each component is internally consistent; no shared Prisma client.
 
@@ -115,9 +121,26 @@ Worker calls `POST /api/dispatch/heartbeat/:jobId` every 30 s while a job is run
 - Workers can only claim jobs whose `projectId` matches their registration.
 - One control-plane DB; cross-tenant queries are not possible because every read predicate carries `projectId`.
 
+## Phase 1 execution model
+
+The dispatch wire contract (worker register → claim → heartbeat → complete) is **implemented and tested**, and the in-process worker uses the same code paths an external worker would. Phase 2 only needs to point a real worker process at the dispatch endpoints; no rework of the queue or scheduler is required.
+
+For Phase 1, jobs are executed by an in-process worker that runs alongside the HTTP server in the same Node process:
+
+```
+control-plane (single Node process)
+├─ http server (express) — admin UI + dispatch endpoints
+├─ scheduler tick (croner)   — enqueues from RecurringSchedule
+├─ reaper                    — sweeps stale locks
+└─ in-process worker         — claims via the same SQL, runs runner, completes
+```
+
+Runners that need a project DB connection talk to it via the `PlatformDriver`. The Node driver opens a `pg` pool keyed by `PlatformConnection.baseUrl` / connection string; the .NET driver remains a stub.
+
 ## Non-goals (Phase 1)
 
-- Control-plane UI (no React frontend, no admin login).
+- External per-project worker process (the in-process worker stands in; the dispatch endpoints exist so Phase 2 can introduce one without rework).
+- Platform-repo additions (`taskScheduler` config block, scheduler-worker generator, enqueue-proxy controllers) — deferred.
 - Redis / BullMQ / RabbitMQ / Mongo.
 - Cross-project job orchestration.
 - OpenTelemetry distributed tracing (logs + Prometheus metrics are enough).
@@ -137,21 +160,26 @@ Worker calls `POST /api/dispatch/heartbeat/:jobId` every 30 s while a job is run
 c:\dev\task-schedular\
 ├─ apps\api\
 │  ├─ src\
-│  │  ├─ index.ts                  HTTP + supervisor
-│  │  ├─ worker.ts                 cron tick + reaper + dispatcher loop
-│  │  ├─ queue\                    claim, heartbeat, retry, reaper
-│  │  ├─ scheduler\                cron-registry, action-cron hydration, tick
-│  │  ├─ dispatch\                 register, claim (long-poll), progress ingest
-│  │  ├─ routes\
-│  │  ├─ controllers\
-│  │  ├─ middleware\               auth (per-project JWT), worker-auth (HMAC), error
+│  │  ├─ index.ts                  HTTP + supervisor (boots http, scheduler tick, reaper, in-process worker)
+│  │  ├─ worker\                   in-process worker loop (claim → run runner → complete)
+│  │  ├─ queue\                    claim, heartbeat, complete, reaper, enqueue, list
+│  │  ├─ scheduler\                cron-registry, tick, recurring CRUD
+│  │  ├─ runners\                  bulk-*, scheduled-action, system-cleanup-* (in-process for Phase 1)
+│  │  ├─ routes\                   jobs, schedules, artifacts, platforms, admin/auth, dispatch
+│  │  ├─ middleware\               admin-key (legacy bearer), admin-session (JWT), worker-auth (HMAC), user-jwt, error
 │  │  ├─ platform-driver\          driver.interface.ts, node-driver.ts, dotnet-driver.stub.ts, factory.ts
-│  │  ├─ lib\                      artifact-store, signed-url, csv-stream, xlsx-stream
-│  │  ├─ schemas\                  Zod request/response shapes
-│  │  └─ utils\                    logger, shutdown, crypto
-│  ├─ prisma\schema.prisma         task_scheduler DB
+│  │  ├─ lib\                      artifact-store (local FS), signed-url
+│  │  ├─ config\                   env loader
+│  │  └─ utils\                    logger, crypto (AES, HMAC, sha256), passwords (bcrypt)
+│  ├─ prisma\schema.prisma         task_scheduler DB (incl. AdminUser, AdminSession)
 │  └─ prisma.config.ts             Prisma 7 config (datasource url via env)
-├─ packages\shared-types\          types shared with the emitted worker
+├─ apps\web\                       operator console (Vite + React + TS)
+│  └─ src\
+│     ├─ pages\                    login, dashboard, jobs, schedules, platforms, workers, admins
+│     ├─ components\
+│     ├─ api\                      typed fetch client (uses access token from session)
+│     └─ auth\                     login/refresh, session storage
+├─ packages\shared-types\          enum + payload types reused by web client and (future) worker
 ├─ docs\
 │  └─ architecture.md              (this file)
 └─ Dockerfile
