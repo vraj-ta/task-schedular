@@ -150,7 +150,7 @@ beforeEach(() => {
 // ---------- tests ----------
 
 describe('POST /api/platforms', () => {
-  it('creates a connection (201), encrypts jwtSecret, never echoes plaintext', async () => {
+  it('creates a connection (201), encrypts jwtSecret, returns plaintext exactly once', async () => {
     const res = await request(app).post('/api/platforms').send(VALID_CREATE);
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
@@ -162,15 +162,34 @@ describe('POST /api/platforms', () => {
       enabled: true,
     });
     expect(res.body.data.id).toBeTruthy();
-    // Plaintext secret is never returned
-    expect(JSON.stringify(res.body)).not.toContain('platform-shared-jwt-signing-secret');
-    // No ciphertext fields exposed either
+    // The create response echoes the plaintext secret once so the caller can
+    // install it on the project side.
+    expect(res.body.data.jwtSecret).toBe('platform-shared-jwt-signing-secret');
+    // No ciphertext fields are exposed
     expect(res.body.data).not.toHaveProperty('jwtSecretCiphertext');
     expect(res.body.data).not.toHaveProperty('credentialsCiphertext');
-    // But under the hood the ciphertext decrypts back to the original
+    // Persisted ciphertext decrypts back to the original
     const stored = repo.getCiphertext(res.body.data.id);
     expect(stored).not.toBeNull();
     expect(decrypt(stored!.jwt, TEST_KEY)).toBe('platform-shared-jwt-signing-secret');
+    // Subsequent reads do NOT carry the plaintext
+    const fetched = await request(app).get(`/api/platforms/${res.body.data.id}`);
+    expect(fetched.body.data).not.toHaveProperty('jwtSecret');
+    const listed = await request(app).get('/api/platforms');
+    expect(listed.body.data[0]).not.toHaveProperty('jwtSecret');
+  });
+
+  it('generates a JWT secret when none is provided and returns it once', async () => {
+    const { jwtSecret: _omit, ...withoutSecret } = VALID_CREATE;
+    const res = await request(app).post('/api/platforms').send(withoutSecret);
+    expect(res.status).toBe(201);
+    const generated = res.body.data.jwtSecret as string;
+    expect(typeof generated).toBe('string');
+    // 32 random bytes hex-encoded
+    expect(generated).toMatch(/^[0-9a-f]{64}$/);
+    // The ciphertext decrypts back to the value we returned
+    const stored = repo.getCiphertext(res.body.data.id);
+    expect(decrypt(stored!.jwt, TEST_KEY)).toBe(generated);
   });
 
   it('encrypts credentials when provided', async () => {
@@ -273,6 +292,32 @@ describe('PATCH /api/platforms/:id', () => {
     const res = await request(app)
       .patch(`/api/platforms/${randomUUID()}`)
       .send({ name: 'X' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('POST /api/platforms/:id/rotate-jwt-secret', () => {
+  it('rotates the secret, returns the new plaintext once, ciphertext changes', async () => {
+    const created = (await request(app).post('/api/platforms').send(VALID_CREATE)).body.data;
+    const oldCipher = repo.getCiphertext(created.id)!.jwt;
+
+    const res = await request(app)
+      .post(`/api/platforms/${created.id}/rotate-jwt-secret`)
+      .send({});
+    expect(res.status).toBe(200);
+    const newSecret = res.body.data.jwtSecret as string;
+    expect(newSecret).toMatch(/^[0-9a-f]{64}$/);
+    expect(newSecret).not.toBe('platform-shared-jwt-signing-secret');
+
+    const newCipher = repo.getCiphertext(created.id)!.jwt;
+    expect(newCipher.equals(oldCipher)).toBe(false);
+    expect(decrypt(newCipher, TEST_KEY)).toBe(newSecret);
+  });
+
+  it('returns 404 for an unknown id', async () => {
+    const res = await request(app)
+      .post(`/api/platforms/${randomUUID()}/rotate-jwt-secret`)
+      .send({});
     expect(res.status).toBe(404);
   });
 });

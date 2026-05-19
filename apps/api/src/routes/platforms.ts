@@ -3,7 +3,11 @@ import { z } from 'zod';
 
 import { getPrisma } from '../db.js';
 import { ConflictError, NotFoundError } from '../middleware/error-handler.js';
-import { encrypt, loadEncryptionKey } from '../utils/crypto.js';
+import { encrypt, generateToken, loadEncryptionKey } from '../utils/crypto.js';
+import { logger } from '../utils/logger.js';
+
+/// Length of a server-generated JWT secret (hex chars). 32 random bytes => 64 chars.
+const GENERATED_JWT_SECRET_BYTES = 32;
 
 /**
  * Admin routes for managing `PlatformConnection` rows — one row per registered
@@ -30,7 +34,10 @@ const createBodySchema = z.object({
   name: z.string().min(1).max(200),
   baseUrl: z.string().url(),
   targetType: targetTypeSchema.default('NODE'),
-  jwtSecret: z.string().min(8),
+  /// Optional. When omitted, the control-plane generates a fresh secret and
+  /// returns it once in the create response. The operator (or platform
+  /// generator) then installs it on the project side.
+  jwtSecret: z.string().min(8).optional(),
   credentials: z.unknown().optional(),
   config: z.unknown().default({}),
   enabled: z.boolean().default(true),
@@ -126,19 +133,34 @@ export const createPlatformsRouter = (deps: PlatformsRouterDeps): Router => {
       const body = createBodySchema.parse(req.body);
       const key = deps.loadKey();
 
+      const jwtSecretPlaintext = body.jwtSecret ?? generateToken(GENERATED_JWT_SECRET_BYTES);
+      const wasGenerated = body.jwtSecret === undefined;
+
       const created = await deps.repo.create({
         projectSlug: body.projectSlug,
         name: body.name,
         baseUrl: body.baseUrl,
         targetType: body.targetType,
-        jwtSecretCiphertext: encrypt(body.jwtSecret, key),
+        jwtSecretCiphertext: encrypt(jwtSecretPlaintext, key),
         credentialsCiphertext:
           body.credentials !== undefined ? encrypt(JSON.stringify(body.credentials), key) : null,
         config: body.config ?? {},
         enabled: body.enabled,
       });
 
-      res.status(201).json({ success: true, data: toJson(created) });
+      logger.info('PlatformConnection created', {
+        id: created.id,
+        projectSlug: created.projectSlug,
+        jwtSecretGenerated: wasGenerated,
+      });
+
+      // Return the plaintext secret exactly once. The caller (operator UI or
+      // platform generator) is responsible for installing it on the project
+      // side; the control-plane will never reveal it again.
+      res.status(201).json({
+        success: true,
+        data: { ...toJson(created), jwtSecret: jwtSecretPlaintext },
+      });
     } catch (err) {
       if (err instanceof DuplicateProjectSlugError) {
         return next(ConflictError(err.message));
@@ -187,6 +209,30 @@ export const createPlatformsRouter = (deps: PlatformsRouterDeps): Router => {
       const updated = await deps.repo.update(req.params.id ?? '', patch);
       if (!updated) return next(NotFoundError('PlatformConnection'));
       res.json({ success: true, data: toJson(updated) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  router.post('/:id/rotate-jwt-secret', async (req, res, next) => {
+    try {
+      const key = deps.loadKey();
+      const newSecret = generateToken(GENERATED_JWT_SECRET_BYTES);
+
+      const updated = await deps.repo.update(req.params.id ?? '', {
+        jwtSecretCiphertext: encrypt(newSecret, key),
+      });
+      if (!updated) return next(NotFoundError('PlatformConnection'));
+
+      logger.warn('PlatformConnection JWT secret rotated', {
+        id: updated.id,
+        projectSlug: updated.projectSlug,
+      });
+
+      res.json({
+        success: true,
+        data: { ...toJson(updated), jwtSecret: newSecret },
+      });
     } catch (err) {
       next(err);
     }
