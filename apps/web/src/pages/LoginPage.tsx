@@ -27,16 +27,18 @@ export const LoginPage = () => {
     <div className="login-shell">
       <form onSubmit={onSubmit} className="login-card">
         <div className="login-brand">
-          <div className="sidebar-brand-mark"><Zap size={16} /></div>
+          <div className="sidebar-brand-mark" style={{ width: 42, height: 42 }}><Zap size={20} /></div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: 'var(--text-0)' }}>Task Scheduler</div>
-            <div style={{ fontSize: 12, color: 'var(--text-2)' }}>Operator console</div>
+            <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--text-0)', letterSpacing: '-0.012em' }}>Task Scheduler</div>
+            <div style={{ fontSize: 12, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+              Operator console
+            </div>
           </div>
         </div>
 
-        <h1 style={{ marginBottom: 6 }}>Sign in</h1>
-        <p style={{ color: 'var(--text-2)', fontSize: 13, marginBottom: 22 }}>
-          Use the admin credentials provisioned by the bootstrap script.
+        <h1 style={{ marginBottom: 8, fontSize: 28 }}>Welcome back</h1>
+        <p style={{ color: 'var(--text-2)', fontSize: 14, marginBottom: 28, lineHeight: 1.6 }}>
+          Sign in with the admin credentials provisioned by the bootstrap script.
         </p>
 
         {error && (
@@ -69,16 +71,28 @@ export const LoginPage = () => {
           </Field>
         </div>
 
-        <Button type="submit" variant="primary" block loading={loading}>
+        <Button type="submit" variant="primary" size="lg" block loading={loading}>
           Sign in
         </Button>
 
-        <p style={{ fontSize: 11.5, color: 'var(--text-3)', marginTop: 18, lineHeight: 1.6 }}>
-          Bootstrap the first admin from the api workspace:<br />
-          <code style={{ color: 'var(--text-2)' }}>
+        <div
+          style={{
+            marginTop: 24,
+            padding: '14px 16px',
+            background: 'var(--bg-2)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--r-3)',
+            fontSize: 12,
+            color: 'var(--text-2)',
+            lineHeight: 1.6,
+          }}
+        >
+          <strong style={{ color: 'var(--text-1)', fontWeight: 600 }}>First time here?</strong>
+          {' '}Bootstrap the initial admin from the api workspace:<br />
+          <code style={{ color: 'var(--text-1)', fontSize: 11.5 }}>
             npm run bootstrap-admin --workspace=@task-scheduler/api
           </code>
-        </p>
+        </div>
       </form>
     </div>
   );

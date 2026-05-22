@@ -1,5 +1,4 @@
 import {
-  Activity,
   Calendar,
   ChevronDown,
   ClipboardList,
@@ -98,8 +97,11 @@ export const AppLayout = ({ children }: { children: ReactNode }) => {
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="sidebar-brand">
-          <div className="sidebar-brand-mark"><Zap size={16} /></div>
-          <div className="sidebar-brand-text">Task Scheduler</div>
+          <div className="sidebar-brand-mark"><Zap size={18} /></div>
+          <div style={{ minWidth: 0 }}>
+            <div className="sidebar-brand-text">Task Scheduler</div>
+            <div className="sidebar-brand-sub">Operator console</div>
+          </div>
         </div>
 
         <nav className="sidebar-nav">
@@ -124,7 +126,7 @@ export const AppLayout = ({ children }: { children: ReactNode }) => {
         </nav>
 
         <div className="sidebar-footer">
-          <Activity size={13} />
+          <span className="footer-pulse" />
           <span className="u-truncate">Phase 1 · in-process worker</span>
         </div>
       </aside>
